@@ -14,12 +14,12 @@ if !  dpkg --get-selections | grep  -i xen-hypervisor &> /dev/null ; then
 		exit 1
 	fi
 	
-	
-	log "Setting Xen as default boot entry"
-	if !  sed -i 's/GRUB_DEFAULT=.*\+/GRUB_DEFAULT="Xen 4.1-amd64"/' /etc/default/grub; then
-		log "FATAL: failed to set Xen as d"
-		exit 1
-	fi
+	# Delay this till later... since it tends to boot loop.
+	# log "Setting Xen as default boot entry"
+	# if !  sed -i 's/GRUB_DEFAULT=.*\+/GRUB_DEFAULT="Xen 4.1-amd64"/' /etc/default/grub; then
+	# 	log "FATAL: failed to set Xen as d"
+	# 	exit 1
+	# fi
 	
 	log "Disabling Apparomor"
 	if ! sed -i 's/GRUB_CMDLINE_LINUX=.*\+/GRUB_CMDLINE_LINUX="apparmor=0"/' /etc/default/grub; then
@@ -28,7 +28,7 @@ if !  dpkg --get-selections | grep  -i xen-hypervisor &> /dev/null ; then
 	fi
 
 	log "Setting dom0 memory and vcpu"
-	if  ! sed -i '/GRUB_CMDLINE_LINUX="apparmor=0"/ a\GRUB_CMDLINE_XEN="dom0_mem=2G,max:2G dom0_max_vcpus=2"' /etc/default/grub  ; then
+	if  ! sed -i '/GRUB_CMDLINE_LINUX="apparmor=0"/ a\GRUB_CMDLINE_XEN="dom0_mem=1G,max:1G dom0_max_vcpus=1"' /etc/default/grub  ; then
 		log "FATAL: failed to set dom0 memory and vcpu"
 	fi
 	
@@ -89,6 +89,42 @@ if dpkg --get-selections | grep  -i xen-hypervisor &> /dev/null  && ! dpkg --get
 		log "FATAL: could not set deafult networking to bridge"
 		exit 1
 	fi
+
+	log "Setting Xen as default boot entry"
+	if !  sed -i 's/GRUB_DEFAULT=.*\+/GRUB_DEFAULT="Xen 4.1-amd64"/' /etc/default/grub; then
+		log "FATAL: failed to set Xen as d"
+		exit 1
+	fi
+
+
+	# overwrite the file and add new lines.
+	#    Ref: http://ubuntuforums.org/archive/index.php/t-2158441.html
+	log "Fixing /etc/pam.d/xapi so XenCenter works"
+	if ! echo '#%PAM-1.0' > /etc/pam.d/xapi; then
+		log "FATAL: could not set /etc/pam.d/xapi, first line"
+		exit 1
+	fi
+
+	if ! echo 'auth include common-auth' >> /etc/pam.d/xapi; then
+		log "FATAL: could not set /etc/pam.d/xapi, second line"
+		exit 1
+	fi
+
+	if ! echo 'account include common-auth' >> /etc/pam.d/xapi; then
+		log "FATAL: could not set /etc/pam.d/xapi, third line"
+		exit 1
+	fi
+	
+	if ! echo 'password include common-auth' >> /etc/pam.d/xapi; then
+		log "FATAL: could not set /etc/pam.d/xapi, Last (fourth) line"
+		exit 1
+	fi
+    
+  log "Your /etc/pam.d/xapi should now look like
+    #%PAM-1.0
+    auth include common-auth
+    account include common-auth
+    password include common-auth"
 	
 	log "XAPI setup. REBOOTing now to activate XAPI"
 	reboot
