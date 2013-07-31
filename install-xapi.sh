@@ -96,6 +96,11 @@ if dpkg --get-selections | grep  -i xen-hypervisor &> /dev/null  && ! dpkg --get
 		exit 1
 	fi
 
+	log "Updating GRUB... Again"
+	if ! update-grub &> /dev/null; then
+		log "FATAL: could not oupdate GRUB"
+		exit 1
+	fi
 
 	# overwrite the file and add new lines.
 	#    Ref: http://ubuntuforums.org/archive/index.php/t-2158441.html
