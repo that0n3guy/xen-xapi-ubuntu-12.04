@@ -1,0 +1,418 @@
+sudo fdisk -l
+sudo fdisk /dev/sdb
+  n
+  p
+  1
+  [enter]
+  [enter]
+  q
+  w
+
+sudo fdisk /dev/sdc
+  n
+  p
+  1
+  [enter]
+  [enter]
+  q
+  w
+
+
+# http://zackreed.me/articles/72-snapraid-on-ubuntu-12-04
+# http://www.thegeekstuff.com/2013/01/mke2fs-examples/
+sudo mkfs.ext4 /dev/sdb1
+sudo mkfs.ext4 /dev/sdc1
+
+sudo mkdir /mnt/{data1,data2}
+
+blkid
+
+sudo nano /etc/fstab
+# datadisks
+UUID=9cb37ac8-4081-4633-ad01-2bb6eabf03b4 /media/disk1 ext4 defaults 0 2
+UUID=c30b0bcf-835e-453f-868e-05b5191bac1b /media/disk2 ext4 defaults 0 2
+
+sudo mount -a
+
+sudo dd if=/dev/zero of=/storage/output.img bs=8k count=256k
+
+
+
+
+http://askubuntu.com/questions/146017/mountall-fails-on-startup
+
+
+#list the kernels
+dpkg --list | grep linux-image +
+
+sudo sed -i 's/GRUB_DEFAULT=.*\+/GRUB_DEFAULT="Xen 4.1-amd64>3.2.48-customsds5+"/' /etc/default/grub
+
+#To get xcp to enable:
+sudo rm /var/lib/xcp/local.db
+
+#to enable add-apt-repository
+sudo apt-get install python-software-properties
+
+
+cloudstack
+---------------------------------------------------------------------
+echo "deb http://cloudstack.apt-get.eu/ubuntu precise 4.1" > /etc/apt/sources.list.d/cloudstack.list
+wget -O - http://cloudstack.apt-get.eu/release.asc|apt-key add -
+apt-get update
+
+
+Installing Greyhole
+---------------------------------------------------
+
+
+
+http://www.theurbanpenguin.com/citrix/cxsnfs.html
+
+nano /etc/exports
+exportfs -a
+nano /etc/sysconfig/portmap
+service portmap restart
+service nfs start
+
+rpcinfo -p | awk -F " " '{print $3 ", " $4 ", " $5}' | sort | uniq
+
+
+# tcp, 111, portmapper
+# udp, 111, portmapper
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p tcp -m tcp --dport 111 -j ACCEPT
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p udp -m udp --dport 111 -j ACCEPT
+
+# tcp, 60881, nlockmgr
+# udp, 49608, nlockmgr
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p tcp -m tcp --dport 60881 -j ACCEPT
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p udp -m udp --dport 49608 -j ACCEPT
+
+# tcp, 751, mountd
+# udp, 748, mountd
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p tcp -m tcp --dport 751 -j ACCEPT
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p udp -m udp --dport 748 -j ACCEPT
+
+# tcp, 2049, nfs
+# udp, 2049, nfs
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p tcp -m tcp --dport 2049 -j ACCEPT
+-A RH-Firewall-1-INPUT -s 192.168.1.5 -p udp -m udp --dport 2049 -j ACCEPT
+
+
+
+Steps: 
+##1. Install XCP
+
+##2. Decide how you want to structure disks
+NFS on XCP: http://www.theurbanpenguin.com/citrix/cxsnfs.html (you can do the iptables differently, see below)
+IPTables: 
+- allow ports: http://pario.no/2008/01/15/allow-nfs-through-iptables-on-a-redhat-system/ , http://blogs.citrix.com/2009/01/26/how-to-configure-an-nfs-based-iso-sr-using-local-storage-on-a-xenserver5-host/
+- disable iptables (see the top of http://wiki.xen.org/wiki/NagiosXCP )
+
+
+
+- partition extra drives
+  fdisk /dev/sdb
+    n
+    p
+    1
+    enter
+    enter
+    w
+
+- format patition
+  mkfs.ext3 /dev/sdb1
+
+- mount the new partition and create 2 folders for nfs
+  #get UUID with:
+  blkid
+
+  mkdir /mnt/disk1
+  echo "" >> /etc/fstab
+  echo "#extra disks/partitions" >> /etc/fstab
+  echo "UUID=10ed479c-f122-4c59-9313-293b22d7c769 /mnt/disk1 ext4 defaults 0 2" >> /etc/fstab
+  mount -a
+  mkdir /mnt/disk1/{vdisk,iso}
+
+- disable iptables:
+  /etc/rc.d/init.d/iptables stop
+  chkconfig --del iptables
+
+- Configure portmap
+  sed -i 's/PMAP_ARGS=.*\+/PMAP_ARGS=""/' /etc/sysconfig/portmap
+  chkconfig portmap on
+
+- make sure nfs starts on startup & start it
+  chkconfig --levels 235 nfs on 
+  service nfs start
+  service nfs restart
+
+- make portmap starts
+  service portmap start
+  service portmap restart
+
+
+- configure nfs exports, edit: /etc/exports
+  echo "/mnt/disk1/vdisk        192.168.1.248(rw,sync,no_subtree_check,no_root_squash)" >> /etc/exports
+  echo "/mnt/disk1/iso        192.168.1.0/24(rw,sync,no_subtree_check,no_root_squash)" >> /etc/exports
+  #
+  exportfs -a
+
+(192.168.1.248 is this xcp servers IP address, 192.168.1.0/24 makes it so that the whole IP range can access the folder)
+
+
+- check that you have the nfs exports
+  showmount -e 192.168.1.248
+
+- create a shutdown script to unmount nfs before nfs server shutsdown but after vm's stop.  Otherwise the server will hang on shutdown/restart
+
+cat > /etc/init.d/unmountnetfs <<EOF
+#!/bin/bash
+#
+# earlynetfs         Mount network filesystems.
+#
+# Authors:  Bill Nottingham <notting@redhat.com>
+#   AJ Lewis <alewis@redhat.com>
+#     Miquel van Smoorenburg, <miquels@drinkel.nl.mugnet.org>
+#
+# chkconfig: 345 25 06
+# description: Mounts and unmounts all Network File System (NFS), \
+#        SMB/CIFS (Lan Manager/Windows), and NCP (NetWare) mount points.
+### BEGIN INIT INFO
+# Provides: $local_fs $remote_fs
+### END INIT INFO
+
+[ -f /etc/sysconfig/network ] || exit 0
+. /etc/init.d/functions
+. /etc/sysconfig/network
+
+# Check that networking is up.
+[ "${NETWORKING}" = "no" ] && exit 0
+
+NFSFSTAB=`LC_ALL=C awk '!/^#/ && $3 ~ /^nfs/ && $3 != "nfsd" && $4 !~ /noauto/ { print $2 }' /etc/fstab`
+
+NFSMTAB=`LC_ALL=C awk '$3 ~ /^nfs/ && $3 != "nfsd" && $2 != "/" { print $2 }' /proc/mounts`
+
+# See how we were called.
+case "$1" in
+  start)
+  # Let udev handle any backlog before trying to mount file systems
+  /sbin/udevsettle --timeout=30
+        [ -n "$NFSFSTAB" ] && 
+    {
+      [ ! -f /var/lock/subsys/portmap ] && service portmap start
+      action $"Mounting NFS filesystems: " mount -a -t nfs,nfs4
+    }
+        [ -n "$SMBFSTAB" ] && action $"Mounting SMB filesystems: " mount -a -t smbfs
+        [ -n "$CIFSFSTAB" ] && action $"Mounting CIFS filesystems: " mount -a -t cifs
+        [ -n "$NCPFSTAB" ] && action $"Mounting NCP filesystems: " mount -a -t ncpfs
+        [ -n "$NETDEVFSTAB" ] &&
+    {
+        success "$STRING"
+    echo
+    }
+  touch /var/lock/subsys/earlynetfs
+  action $"Doing nothing: " echo
+  ;;
+  stop)
+        # Unmount loopback stuff first
+  __umount_loopback_loop
+  __umount_blktap_loop
+    if [ -n "$NFSMTAB" ]; then
+    __umount_loop '$3 ~ /^nfs/ && $3 != "nfsd" && $2 != "/" {print $2}' \
+      /proc/mounts \
+      $"Unmounting NFS(early) filesystems: " \
+      $"Unmounting NFS(early) filesystems (retry): " \
+      "-f -l"
+  fi
+  rm -f /var/lock/subsys/earlynetfs
+  ;;
+  status)
+  if [ -f /proc/mounts ] ; then
+          [ -n "$NFSFSTAB" ] && {
+         echo $"Configured NFS mountpoints: "
+         for fs in $NFSFSTAB; do echo $fs ; done
+    }
+    [ -n "$NFSMTAB" ] && {
+                      echo $"Active NFS mountpoints: "
+          for fs in $NFSMTAB; do echo $fs ; done
+    }
+  else
+    echo $"/proc filesystem unavailable"
+  fi
+  [ -r /var/lock/subsys/earlynetfs ] || exit 2
+  ;;
+  restart)
+  $0 stop
+  $0 start
+  ;;
+  reload)
+        $0 start
+  ;;
+  *)
+  echo $"Usage: $0 {start|stop|restart|reload|status}"
+  exit 1
+esac
+
+exit 0
+
+
+EOF
+
+chmod +x /etc/init.d/earlynetfs
+chkconfig --add earlynetfs
+
+
+- verify that the script is in the right sections (rc0 and rc6)
+find /etc/rc.d -name "*earlynetfs*" -print
+chkconfig --list
+
+
+##3. Add Storage to Xencenter
+- NFS: end of this video: http://www.theurbanpenguin.com/citrix/cxsnfs.html
+- Local: http://support.citrix.com/article/CTX121313
+
+##4. Installing VM
+- if console won't work: http://support.citrix.com/article/CTX119906
+
+##5. tweaks
+- to limit the dom0 cpu's, set it in  extlinux.conf in /boot
+
+
+
+Notes: creating Templates:
+http://invalidlogic.com/2012/05/01/deploying-ubuntu-12-04-on-xenserver-made-easy/
+script at the bottom: http://grantmcwilliams.com/item/579-how-to-createdelete-xcp-templates
+
+Converting HVM to PV:
+http://invalidlogic.com/2012/05/01/deploying-ubuntu-12-04-on-xenserver-made-easy/
+and http://www.xenlens.com/install-ubuntu-12-04-server-on-citrix-xenserver-6-0-2/
+(create a batch script or writeup)
+
+
+
+
+
+xe template-param-list uuid=a1ab9726-f482-31bc-4fa1-7ecb3c0cec22
+
+ssh -t -L7500:68.226.62.104:7500 root@68.226.62.104 'ssh -t -L7500:192.168.1.100:5900 vmmythbox@192.168.1.100'
+
+ssh -t -L7501:68.226.62.104:7501 root@68.226.62.104 'ssh -t -L7501:192.168.1.100:5901 vmmythbox@192.168.1.100'
+
+ssh -t -L7502:68.226.62.104:7502 root@68.226.62.104 'ssh -t -L7502:192.168.1.100:5902 vmmythbox@192.168.1.100'
+
+ssh tunnel through soxy proxy
+ssh -D 8080 -C -N root@68.226.62.104
+
+# vnc-server.conf
+
+start on runlevel [2345]
+stop on runlevel [016]
+
+post-start script
+        su vmmythbox -c '/usr/bin/vncserver :1 -geometry 1024x768'
+end script
+
+post-stop script
+        su vmmythbox -c '/usr/bin/vncserver -kill :1'
+end script
+
+#End of File
+
+
+
+
+#mount NFS on ubuntu 12.04
+mount -v 192.168.1.5:/mnt/vmstore/iso /mnt/sriso
+#on server with port range: /mnt/vmstore/iso        192.168.1.0/24(rw,nohide,sync,no_sub....
+
+#custom - fstab nfs mounts
+192.168.1.5:/mnt/vmstore/iso    /mnt/sriso      nfs     rsize=8192,wsize=8192,timeo=14,intr
+
+
+
+
+
+##8. Adding iscsi for additional drives
+#
+script on amahi forums that I made
+
+
+##9. iscsi target on xcp
+
+yum --enablerepo=base install scsi-target-utils
+
+cat >> /etc/tgt/targets.conf <EOF
+
+<target iqn.2012-10.net.cpd:san.target01>
+backing-store /dev/md0
+incominguser iscsiadm iscsiadm123
+</target>
+
+<target iqn.2013-08.com.vhome:olddell500g>
+    backing-store=/dev/sdb2 
+    allow-in-use yes
+    incominguser iscsiadm iscsiadm123
+</target>
+
+
+EOF
+
+
+service tgtd restart
+chkconfig tgtd on
+
+
+
+#http://grantmcwilliams.com/item/553-creating-an-iscsi-target-on-xen-cloud-platform-11
+#List active targets
+tgtadm --lld iscsi --mode target --op show
+
+#Create a new target device
+tgtadm --lld iscsi --mode target --op new --tid=1 --targetname iqn.2013-08.com.vhome:olddell500g
+tgtadm --lld iscsi --mode logicalunit --op new --tid=1 --lun=1 --backing-store=/dev/sdb
+
+#access control
+#http://fedoraproject.org/wiki/Scsi-target-utils_Quickstart_Guide
+tgtadm --lld iscsi --mode target --op bind --tid=1 -I ALL
+OR
+tgtadm --lld iscsi --mode account --op new --user ''usernamehere'' --password ''passwordhere''
+tgtadm --lld iscsi --mode account --op bind --tid 1 --user ''consumer''
+or
+tgtadm --lld iscsi --mode target --op bind --tid=1 --initiator-address=ipaddresshere
+
+#if you want to delete
+tgtadm --lld iscsi --mode logicalunit --op delete --tid=1 --lun=1
+tgtadm --lld iscsi --mode target --op delete --tid=1 
+tgtadm --lld iscsi --mode account --op delete --user ''usernamehere''
+
+#to make persistant
+tgt-admin --dump > /etc/tgt/targets.conf
+
+cat >> /etc/rc.local << EOF
+# AutoStart Vapp's that have autostart in description
+# Script created by Raido Consultants - http://www.raido.be 
+# http://www.virtues.it/2012/01/howto-autostart-xs-vapp/
+TAG="autostart"
+# helper function
+function xe_param()
+{
+  PARAM=$1
+  while read DATA; do
+    LINE=$(echo $DATA | egrep "$PARAM")
+    if [ $? -eq 0 ]; then
+      echo "$LINE" | awk 'BEGIN{FS=": "}{print $2}'
+    fi
+  done
+} # Get all Applicances
+sleep 20
+VAPPS=$(xe appliance-list | xe_param uuid) for VAPP in $VAPPS; do
+  echo "Raido AutoStart : Checking vApp $VAPP"
+  VAPP_TAGS="$(xe appliance-param-get uuid=$VAPP param-name=name-description)" if [[ $VAPP_TAGS == *$TAG* ]]
+  then
+    echo "starting vApp $VAPP"
+    xe appliance-start uuid=$VAPP
+    sleep 20
+  fi
+done
+
+EOF
